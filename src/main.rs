@@ -1,15 +1,82 @@
-use std::fs::File;
-use std::io::{self, Read, Write};
-use std::path::Path;
-use std::time::Duration;
-use rand::{thread_rng};
-use rand::seq::IndexedRandom;
-use crossterm::{ cursor, terminal, event, execute, queue, style::{self, Color, Print } };
 use crossterm::event::{Event, KeyCode, KeyEvent};
 use crossterm::style::SetForegroundColor;
+use crossterm::{
+    cursor, event, execute, queue,
+    style::{self, Color, Print},
+    terminal,
+};
+use rand::seq::IndexedRandom;
+use rand::thread_rng;
+use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::fs;
+use std::fs::File;
+use std::io::{self, read_to_string, Read, Write};
+use std::path::Path;
+use std::time::Duration;
+
+#[derive(Serialize, Deserialize, Eq, PartialEq)]
+struct WordData {
+    key: String,
+    value: i32,
+}
+
+impl WordData {
+    fn new(key: String, value: i32) -> WordData {
+        WordData { key, value }
+    }
+}
+
+impl Ord for WordData {
+    fn cmp(&self, other: &WordData) -> Ordering {
+        self.value.cmp(&other.value)
+    }
+}
+
+impl PartialOrd for WordData {
+    fn partial_cmp(&self, other: &WordData) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct MainData {
+    entries: Vec<WordData>,
+}
+
+impl MainData {
+    fn new() -> Self {
+        MainData {
+            entries: Vec::new(),
+        }
+    }
+
+    fn add(&mut self, key: String, value: i32) {
+        self.entries.push(WordData::new(key, value));
+    }
+
+    fn sort_by_value(&mut self) {
+        self.entries.sort_by(|a, b| a.value.cmp(&b.value));
+    }
+
+    fn export_data(&self, filepath: &str) -> io::Result<()> {
+        let json = serde_json::to_string_pretty(&self)?;
+        let mut file = File::create(filepath)?;
+        file.write_all(json.as_bytes())?;
+        Ok(())
+    }
+
+    fn import_data(filepath: &str) -> io::Result<Self> {
+        let file_content = fs::read_to_string(filepath)?;
+        let database: MainData = serde_json::from_str(&file_content)?;
+        Ok(database)
+    }
+}
 
 fn read_file_for_words<P>(filename: P) -> io::Result<Vec<String>>
-where P: AsRef<Path>,
+where
+    P: AsRef<Path>,
 {
     let mut file = File::open(filename)?;
     let mut contents = String::new();
@@ -20,31 +87,57 @@ where P: AsRef<Path>,
 }
 
 fn main() -> io::Result<()> {
-    let filename = "words.txt";
-    let words = read_file_for_words(filename).expect("Something went wrong reading the file");
+    let cache_file_name = "cache.json";
+    let mut main_data = MainData::new();
+    let path = Path::new(cache_file_name);
 
-    if words.is_empty() {
-        println!("No words found.");
-        return Ok(());
+    // loading the data into memory
+    if !path.exists() {
+        let filename = "words.txt";
+        let words = read_file_for_words(filename).expect("Something went wrong reading the file");
+
+        if words.is_empty() {
+            println!("No words found.");
+            return Ok(());
+        }
+        for word in words {
+            main_data.add(word, 0);
+        }
+    } else {
+        main_data =
+            MainData::import_data(&cache_file_name).expect("Something went wrong reading the file");
     }
 
-    let mut rng = thread_rng();
-    // let random_word = words.choose(&mut rng).expect("Array is empty");
-    let random_word = "Something to do with life";
-    println!("{}", random_word);
+    // sentence for current test.
+    let word_count: u8 = 20;
+    let mut current_sentence = String::new();
+
+    for item in main_data.entries.iter_mut().take(word_count as usize) {
+        let word = item.key.as_str().to_owned() + " ";
+        current_sentence.push_str(&word);
+    }
 
     let mut stdout = io::stdout();
 
     execute!(stdout, terminal::Clear(terminal::ClearType::All));
 
-    for word in random_word.split_whitespace() {
-        queue!(stdout, style::SetForegroundColor(Color::Grey), Print(word), Print(" "))?;
-    }
+    let mut current_position = 0;
+    let mut typed_word = String::new();
+
+    let random_word = &current_sentence;
+
+    // for word in random_word.split_whitespace() {
+    //     queue!(stdout, style::SetForegroundColor(Color::Grey), cursor::MoveTo(current_position as u16, 0), Print(word))?;
+    // }
+    queue!(
+        stdout,
+        style::SetForegroundColor(Color::Grey),
+        cursor::MoveTo(current_position as u16, 0),
+        Print(random_word.clone())
+    )?;
     stdout.flush()?;
     let mut is_word_correct = true;
 
-    let mut current_position = 0;
-    let mut typed_word = String::new();
     loop {
         if event::poll(Duration::from_millis(300))? {
             if let Event::Key(KeyEvent { code, kind, .. }) = event::read()? {
@@ -64,11 +157,7 @@ fn main() -> io::Result<()> {
                                 is_word_correct = false;
                             }
 
-                            let color = if is_correct {
-                                Color::White
-                            } else {
-                                Color::Red
-                            };
+                            let color = if is_correct { Color::White } else { Color::Red };
 
                             execute!(stdout, SetForegroundColor(color))?;
                             if target_char == ' ' && !is_word_correct {
@@ -88,12 +177,19 @@ fn main() -> io::Result<()> {
                             current_position -= 1;
                             typed_word.pop();
 
-                            is_word_correct = typed_word.chars().zip(random_word.chars()).all(|(c1, c2)| c1 == c2);
+                            is_word_correct = typed_word
+                                .chars()
+                                .zip(random_word.chars())
+                                .all(|(c1, c2)| c1 == c2);
 
                             let target_chars: Vec<char> = random_word.chars().collect();
                             let target_char = target_chars[current_position];
 
-                            execute!(stdout, cursor::MoveTo(current_position as u16, 0), SetForegroundColor(Color::Grey))?;
+                            execute!(
+                                stdout,
+                                cursor::MoveTo(current_position as u16, 0),
+                                SetForegroundColor(Color::Grey)
+                            )?;
                             print!("{}", target_char);
 
                             execute!(stdout, cursor::MoveTo(current_position as u16, 0))?;
@@ -115,6 +211,10 @@ fn main() -> io::Result<()> {
             }
             break;
         }
+    }
+
+    if !main_data.entries.is_empty() {
+        main_data.export_data(cache_file_name);
     }
     Ok(())
 }
