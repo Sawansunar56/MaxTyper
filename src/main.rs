@@ -5,16 +5,15 @@ use crossterm::{
     style::{self, Color, Print},
     terminal,
 };
-use rand::seq::IndexedRandom;
-use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io::{self, read_to_string, Read, Write};
+use std::ops::AddAssign;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+// use std::thread::sleep;
 
 #[derive(Serialize, Deserialize, Eq, PartialEq)]
 struct WordData {
@@ -43,6 +42,11 @@ impl PartialOrd for WordData {
 #[derive(Serialize, Deserialize)]
 struct MainData {
     entries: Vec<WordData>,
+}
+
+enum RaceType {
+    RaceTime,
+    RaceWords,
 }
 
 impl MainData {
@@ -111,6 +115,7 @@ fn main() -> io::Result<()> {
     // sentence for current test.
     let word_count: u8 = 20;
     let mut current_sentence = String::new();
+    let mut current_word_index: u8 = 0;
 
     for item in main_data.entries.iter_mut().take(word_count as usize) {
         let word = item.key.as_str().to_owned() + " ";
@@ -124,7 +129,7 @@ fn main() -> io::Result<()> {
     let mut current_position = 0;
     let mut typed_word = String::new();
 
-    let random_word = &current_sentence;
+    let mut random_word = current_sentence;
 
     // for word in random_word.split_whitespace() {
     //     queue!(stdout, style::SetForegroundColor(Color::Grey), cursor::MoveTo(current_position as u16, 0), Print(word))?;
@@ -138,30 +143,72 @@ fn main() -> io::Result<()> {
     stdout.flush()?;
     let mut is_word_correct = true;
 
+    // Make this more generic so that I can make even more options like on timer
+    // on para completion, on speed.
+    let mut start_time = Instant::now();
+    let mut timer_init: bool = false;
     loop {
         if event::poll(Duration::from_millis(300))? {
             if let Event::Key(KeyEvent { code, kind, .. }) = event::read()? {
                 if kind != event::KeyEventKind::Press {
                     continue;
                 }
+
                 match code {
                     KeyCode::Esc => break,
+                    KeyCode::Tab => {
+                        // Restart system
+                        // Maybe make reset function.
+                        current_word_index = 0;
+                        current_position = 0;
+                        main_data.sort_by_value();
+                        main_data.export_data(cache_file_name)?;
+                        let mut new_sentence = String::new();
+                        for item in main_data.entries.iter_mut().take(word_count as usize) {
+                            let word = item.key.as_str().to_owned() + " ";
+                            new_sentence.push_str(&word);
+                        }
+
+                        random_word = new_sentence;
+                        execute!(stdout, terminal::Clear(terminal::ClearType::All));
+                        queue!(
+                            stdout,
+                            style::SetForegroundColor(Color::Grey),
+                            cursor::MoveTo(current_position as u16, 0),
+                            Print(random_word.clone())
+                        )?;
+                    }
                     KeyCode::Char(c) => {
+                        if !timer_init {
+                            timer_init = true;
+                            start_time = Instant::now();
+                        }
                         if current_position < random_word.len() {
                             let target_char = random_word.chars().nth(current_position).unwrap();
 
                             execute!(stdout, cursor::MoveTo(current_position as u16, 0))?;
 
                             let is_correct = c == target_char;
+                            let color = if is_correct { Color::White } else { Color::Red };
+                            execute!(stdout, SetForegroundColor(color))?;
+
                             if !is_correct {
                                 is_word_correct = false;
+                                main_data.entries[current_word_index as usize].value -= 2;
                             }
 
-                            let color = if is_correct { Color::White } else { Color::Red };
-
-                            execute!(stdout, SetForegroundColor(color))?;
-                            if target_char == ' ' && !is_word_correct {
-                                print!("_");
+                            // I think I can inline this somehow. I don't wanna
+                            // think about it though
+                            if target_char == ' ' {
+                                if !is_correct {
+                                    print!("_");
+                                } else {
+                                    if is_word_correct {
+                                        main_data.entries[current_word_index as usize].value += 1;
+                                    }
+                                    current_word_index += 1;
+                                    print!("{}", target_char);
+                                }
                             } else {
                                 print!("{}", target_char);
                             }
@@ -184,6 +231,10 @@ fn main() -> io::Result<()> {
 
                             let target_chars: Vec<char> = random_word.chars().collect();
                             let target_char = target_chars[current_position];
+
+                            if target_char == ' ' {
+                                current_word_index -= 1;
+                            }
 
                             execute!(
                                 stdout,
@@ -213,8 +264,15 @@ fn main() -> io::Result<()> {
         }
     }
 
+    let end_time = Instant::now();
+    let duration = end_time - start_time;
+    println!("Duration of the Test: {}", duration.as_secs());
+    let wpm: f32 = word_count as f32 / (duration.as_secs_f32() / 60.0);
+    println!("WPM: {}", wpm);
+
     if !main_data.entries.is_empty() {
-        main_data.export_data(cache_file_name);
+        main_data.sort_by_value();
+        main_data.export_data(cache_file_name)?;
     }
     Ok(())
 }
