@@ -10,7 +10,6 @@ use std::cmp::Ordering;
 use std::fs;
 use std::fs::File;
 use std::io::{self, read_to_string, Read, Write};
-use std::ops::AddAssign;
 use std::path::Path;
 use std::time::{Duration, Instant};
 // use std::thread::sleep;
@@ -124,7 +123,7 @@ fn main() -> io::Result<()> {
 
     let mut stdout = io::stdout();
 
-    execute!(stdout, terminal::Clear(terminal::ClearType::All));
+    execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
 
     let mut current_position = 0;
     let mut typed_word = String::new();
@@ -136,7 +135,7 @@ fn main() -> io::Result<()> {
     // }
     queue!(
         stdout,
-        style::SetForegroundColor(Color::Grey),
+        style::SetForegroundColor(Color::DarkGrey),
         cursor::MoveTo(current_position as u16, 0),
         Print(random_word.clone())
     )?;
@@ -148,108 +147,117 @@ fn main() -> io::Result<()> {
     let mut start_time = Instant::now();
     let mut timer_init: bool = false;
     loop {
-        if event::poll(Duration::from_millis(300))? {
-            if let Event::Key(KeyEvent { code, kind, .. }) = event::read()? {
-                if kind != event::KeyEventKind::Press {
-                    continue;
-                }
+        // if event::poll(Duration::from_millis(100))? {
+        if let Event::Key(KeyEvent { code, kind, .. }) = event::read()? {
+            if kind != event::KeyEventKind::Press {
+                continue;
+            }
 
-                match code {
-                    KeyCode::Esc => break,
-                    KeyCode::Tab => {
-                        // Restart system
-                        // Maybe make reset function.
-                        current_word_index = 0;
-                        current_position = 0;
-                        main_data.sort_by_value();
-                        main_data.export_data(cache_file_name)?;
-                        let mut new_sentence = String::new();
-                        for item in main_data.entries.iter_mut().take(word_count as usize) {
-                            let word = item.key.as_str().to_owned() + " ";
-                            new_sentence.push_str(&word);
-                        }
-
-                        random_word = new_sentence;
-                        execute!(stdout, terminal::Clear(terminal::ClearType::All));
-                        queue!(
-                            stdout,
-                            style::SetForegroundColor(Color::Grey),
-                            cursor::MoveTo(current_position as u16, 0),
-                            Print(random_word.clone())
-                        )?;
+            match code {
+                KeyCode::Esc => break,
+                KeyCode::Tab => {
+                    // Restart system
+                    // Maybe make reset function.
+                    current_word_index = 0;
+                    current_position = 0;
+                    main_data.sort_by_value();
+                    main_data.export_data(cache_file_name)?;
+                    let mut new_sentence = String::new();
+                    for item in main_data.entries.iter_mut().take(word_count as usize) {
+                        let word = item.key.as_str().to_owned() + " ";
+                        new_sentence.push_str(&word);
                     }
-                    KeyCode::Char(c) => {
-                        if !timer_init {
-                            timer_init = true;
-                            start_time = Instant::now();
+
+                    random_word = new_sentence;
+                    queue!(
+                        stdout,
+                        style::SetForegroundColor(Color::DarkGrey),
+                        terminal::Clear(terminal::ClearType::All),
+                        cursor::MoveTo(current_position as u16, 0),
+                    )?;
+                    stdout.flush();
+                    print!("{}", random_word);
+                    // queue!(
+                    //     stdout,
+                    //     style::SetForegroundColor(Color::Grey),
+                    //     cursor::MoveTo(current_position as u16, 0),
+                    //     Print(random_word.clone())
+                    // )?;
+                    typed_word.clear();
+                    start_time = Instant::now();
+                }
+                KeyCode::Char(c) => {
+                    if !timer_init {
+                        timer_init = true;
+                        start_time = Instant::now();
+                    }
+                    if current_position < random_word.len() {
+                        let target_char = random_word.chars().nth(current_position).unwrap();
+
+                        execute!(stdout, cursor::MoveTo(current_position as u16, 0))?;
+
+                        let is_correct = c == target_char;
+                        let color = if is_correct { Color::White } else { Color::Red };
+                        execute!(stdout, SetForegroundColor(color))?;
+
+                        if !is_correct {
+                            is_word_correct = false;
+                            main_data.entries[current_word_index as usize].value -= 2;
                         }
-                        if current_position < random_word.len() {
-                            let target_char = random_word.chars().nth(current_position).unwrap();
 
-                            execute!(stdout, cursor::MoveTo(current_position as u16, 0))?;
-
-                            let is_correct = c == target_char;
-                            let color = if is_correct { Color::White } else { Color::Red };
-                            execute!(stdout, SetForegroundColor(color))?;
-
+                        // I think I can inline this somehow. I don't wanna
+                        // think about it though
+                        if target_char == ' ' {
                             if !is_correct {
-                                is_word_correct = false;
-                                main_data.entries[current_word_index as usize].value -= 2;
-                            }
-
-                            // I think I can inline this somehow. I don't wanna
-                            // think about it though
-                            if target_char == ' ' {
-                                if !is_correct {
-                                    print!("_");
-                                } else {
-                                    if is_word_correct {
-                                        main_data.entries[current_word_index as usize].value += 1;
-                                    }
-                                    current_word_index += 1;
-                                    print!("{}", target_char);
-                                }
+                                print!("_");
                             } else {
+                                if is_word_correct {
+                                    main_data.entries[current_word_index as usize].value += 1;
+                                }
+                                current_word_index += 1;
                                 print!("{}", target_char);
                             }
-
-                            typed_word.push(target_char);
-                            current_position += 1;
-
-                            execute!(stdout, cursor::MoveTo(current_position as u16, 0))?;
-                        }
-                    }
-                    KeyCode::Backspace => {
-                        if current_position > 0 {
-                            current_position -= 1;
-                            typed_word.pop();
-
-                            is_word_correct = typed_word
-                                .chars()
-                                .zip(random_word.chars())
-                                .all(|(c1, c2)| c1 == c2);
-
-                            let target_chars: Vec<char> = random_word.chars().collect();
-                            let target_char = target_chars[current_position];
-
-                            if target_char == ' ' {
-                                current_word_index -= 1;
-                            }
-
-                            execute!(
-                                stdout,
-                                cursor::MoveTo(current_position as u16, 0),
-                                SetForegroundColor(Color::Grey)
-                            )?;
+                        } else {
                             print!("{}", target_char);
-
-                            execute!(stdout, cursor::MoveTo(current_position as u16, 0))?;
                         }
+
+                        typed_word.push(target_char);
+                        current_position += 1;
+
+                        execute!(stdout, cursor::MoveTo(current_position as u16, 0))?;
                     }
-                    _ => {}
                 }
+                KeyCode::Backspace => {
+                    if current_position > 0 {
+                        current_position -= 1;
+                        typed_word.pop();
+
+                        is_word_correct = typed_word
+                            .chars()
+                            .zip(random_word.chars())
+                            .all(|(c1, c2)| c1 == c2);
+
+                        let target_chars: Vec<char> = random_word.chars().collect();
+                        let target_char = target_chars[current_position];
+
+                        if target_char == ' ' {
+                            current_word_index -= 1;
+                        }
+
+                        execute!(
+                            stdout,
+                            cursor::MoveTo(current_position as u16, 0),
+                            SetForegroundColor(Color::Grey)
+                        )?;
+                        print!("{}", target_char);
+
+                        execute!(stdout, cursor::MoveTo(current_position as u16, 0))?;
+                    }
+                }
+                _ => {}
             }
         }
+        // }
 
         if current_position == random_word.len() {
             execute!(stdout, cursor::MoveTo(0, 2))?;
@@ -258,7 +266,7 @@ fn main() -> io::Result<()> {
                 println!("You have completed");
                 println!("{}", typed_word);
             } else {
-                print!("You are wrong");
+                println!("You are wrong");
             }
             break;
         }
