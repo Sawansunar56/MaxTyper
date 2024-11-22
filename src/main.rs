@@ -174,9 +174,13 @@ fn main() -> io::Result<()> {
                         style::SetForegroundColor(Color::DarkGrey),
                         terminal::Clear(terminal::ClearType::All),
                         cursor::MoveTo(current_position as u16, 0),
+                        Print(&random_word),
+                        cursor::MoveTo(current_position as u16, 0),
                     )?;
-                    stdout.flush();
-                    print!("{}", random_word);
+                    stdout.flush()?;
+                    // print!("{}", random_word);
+                    // execute!(stdout, cursor::MoveTo(current_position as u16, 0))?;
+                    // stdout.flush()?;
                     // queue!(
                     //     stdout,
                     //     style::SetForegroundColor(Color::Grey),
