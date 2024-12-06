@@ -12,6 +12,8 @@ use std::fs::File;
 use std::io::{self, read_to_string, Read, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
+use rand::seq::IndexedRandom;
+use rand::thread_rng;
 // use std::thread::sleep;
 
 #[derive(Serialize, Deserialize, Eq, PartialEq)]
@@ -43,7 +45,8 @@ struct MainData {
     entries: Vec<WordData>,
 }
 
-enum RaceType {
+// NOTE: Use this later 
+enum _RaceType {
     RaceTime,
     RaceWords,
 }
@@ -93,6 +96,9 @@ fn main() -> io::Result<()> {
     let cache_file_name = "cache.json";
     let mut main_data = MainData::new();
     let path = Path::new(cache_file_name);
+    let main_color = Color::White;
+    let alternate_color = Color::DarkGrey;
+    let error_color = Color::Red;
 
     // loading the data into memory
     if !path.exists() {
@@ -115,10 +121,23 @@ fn main() -> io::Result<()> {
     let word_count: u8 = 20;
     let mut current_sentence = String::new();
     let mut current_word_index: u8 = 0;
+    let mistake_truth = false;
 
-    for item in main_data.entries.iter_mut().take(word_count as usize) {
-        let word = item.key.as_str().to_owned() + " ";
-        current_sentence.push_str(&word);
+    // TODO: Make current_word_index flexible with the random word generation as
+    // well as the normal wrong sorted values. 
+    if mistake_truth {
+        // sown: just generates negative value in order. 
+        for item in main_data.entries.iter_mut().take(word_count as usize) {
+            let word = item.key.as_str().to_owned() + " ";
+            current_sentence.push_str(&word);
+        }
+    } else {
+        for _ in 0..word_count {
+            if let Some(random_word) = main_data.entries.choose(&mut thread_rng()) {
+                current_sentence.push_str(&random_word.key);
+                current_sentence.push_str(" ");
+            }
+        }
     }
 
     let mut stdout = io::stdout();
@@ -128,6 +147,7 @@ fn main() -> io::Result<()> {
     let mut current_position = 0;
     let mut typed_word = String::new();
 
+    // FIX: This damn random word is a wrong way to name this. 
     let mut random_word = current_sentence;
 
     // for word in random_word.split_whitespace() {
@@ -135,7 +155,7 @@ fn main() -> io::Result<()> {
     // }
     queue!(
         stdout,
-        style::SetForegroundColor(Color::DarkGrey),
+        style::SetForegroundColor(alternate_color),
         cursor::MoveTo(current_position as u16, 0),
         Print(random_word.clone())
     )?;
@@ -171,7 +191,7 @@ fn main() -> io::Result<()> {
                     random_word = new_sentence;
                     queue!(
                         stdout,
-                        style::SetForegroundColor(Color::DarkGrey),
+                        style::SetForegroundColor(alternate_color),
                         terminal::Clear(terminal::ClearType::All),
                         cursor::MoveTo(current_position as u16, 0),
                         Print(&random_word),
@@ -201,7 +221,7 @@ fn main() -> io::Result<()> {
                         execute!(stdout, cursor::MoveTo(current_position as u16, 0))?;
 
                         let is_correct = c == target_char;
-                        let color = if is_correct { Color::White } else { Color::Red };
+                        let color = if is_correct { main_color } else { error_color };
                         execute!(stdout, SetForegroundColor(color))?;
 
                         if !is_correct {
@@ -209,8 +229,6 @@ fn main() -> io::Result<()> {
                             main_data.entries[current_word_index as usize].value -= 2;
                         }
 
-                        // I think I can inline this somehow. I don't wanna
-                        // think about it though
                         if target_char == ' ' {
                             if !is_correct {
                                 print!("_");
@@ -251,7 +269,7 @@ fn main() -> io::Result<()> {
                         execute!(
                             stdout,
                             cursor::MoveTo(current_position as u16, 0),
-                            SetForegroundColor(Color::Grey)
+                            SetForegroundColor(alternate_color)
                         )?;
                         print!("{}", target_char);
 
@@ -268,7 +286,7 @@ fn main() -> io::Result<()> {
             // This is a wrong comparison
             if is_word_correct {
                 println!("You have completed");
-                println!("{}", typed_word);
+                // println!("{}", typed_word);
             } else {
                 println!("You are wrong");
             }
@@ -278,11 +296,12 @@ fn main() -> io::Result<()> {
 
     let end_time = Instant::now();
     let duration = end_time - start_time;
-    println!("Duration of the Test: {}", duration.as_secs());
+    println!("Duration: {}s", duration.as_secs());
     let wpm: f32 = word_count as f32 / (duration.as_secs_f32() / 60.0);
     println!("WPM: {}", wpm);
 
     if !main_data.entries.is_empty() {
+        println!("Saved File");
         main_data.sort_by_value();
         main_data.export_data(cache_file_name)?;
     }
