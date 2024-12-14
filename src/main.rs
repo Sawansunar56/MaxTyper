@@ -5,6 +5,8 @@ use crossterm::{
     style::{self, Color, Print},
     terminal,
 };
+use rand::seq::IndexedRandom;
+use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fs;
@@ -12,8 +14,6 @@ use std::fs::File;
 use std::io::{self, read_to_string, Read, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
-use rand::seq::IndexedRandom;
-use rand::thread_rng;
 // use std::thread::sleep;
 
 #[derive(Serialize, Deserialize, Eq, PartialEq)]
@@ -43,12 +43,6 @@ impl PartialOrd for WordData {
 #[derive(Serialize, Deserialize)]
 struct MainData {
     entries: Vec<WordData>,
-}
-
-// NOTE: Use this later 
-enum _RaceType {
-    RaceTime,
-    RaceWords,
 }
 
 impl MainData {
@@ -92,6 +86,21 @@ where
     Ok(words)
 }
 
+enum _RaceType {
+    RaceTime,
+    RaceWords,
+}
+
+enum SenGenType {
+    Mistake,
+    Random,
+}
+
+enum GameStage {
+    Menu,
+    Game,
+}
+
 fn main() -> io::Result<()> {
     let cache_file_name = "cache.json";
     let mut main_data = MainData::new();
@@ -121,21 +130,30 @@ fn main() -> io::Result<()> {
     let word_count: u8 = 20;
     let mut current_sentence = String::new();
     let mut current_word_index: u8 = 0;
-    let mistake_truth = false;
+    let _mistake_truth = true;
+    let game_type = SenGenType::Mistake;
 
     // TODO: Make current_word_index flexible with the random word generation as
-    // well as the normal wrong sorted values. 
-    if mistake_truth {
-        // sown: just generates negative value in order. 
-        for item in main_data.entries.iter_mut().take(word_count as usize) {
-            let word = item.key.as_str().to_owned() + " ";
-            current_sentence.push_str(&word);
+    // well as the normal wrong sorted values.
+    // NOTE: This is a good structure I think. The sentence to be rendered can be
+    // prepared in here and just all the rendering stuff for later. And the addition
+    // and negative thingy here.
+
+    // Sentence Generation Code here.
+    match game_type {
+        SenGenType::Random => {
+            for _ in 0..word_count {
+                if let Some(random_word) = main_data.entries.choose(&mut thread_rng()) {
+                    current_sentence.push_str(&random_word.key);
+                    current_sentence.push_str(" ");
+                }
+            }
         }
-    } else {
-        for _ in 0..word_count {
-            if let Some(random_word) = main_data.entries.choose(&mut thread_rng()) {
-                current_sentence.push_str(&random_word.key);
-                current_sentence.push_str(" ");
+        SenGenType::Mistake => {
+            // sown: just generates negative value in order.
+            for item in main_data.entries.iter_mut().take(word_count as usize) {
+                let word = item.key.as_str().to_owned() + " ";
+                current_sentence.push_str(&word);
             }
         }
     }
@@ -147,7 +165,8 @@ fn main() -> io::Result<()> {
     let mut current_position = 0;
     let mut typed_word = String::new();
 
-    // FIX: This damn random word is a wrong way to name this. 
+    // FIX: This damn random word is a wrong way to name this. Probably need to 
+    // fix it when I am revamping the game implementation.
     let mut random_word = current_sentence;
 
     // for word in random_word.split_whitespace() {
@@ -166,7 +185,36 @@ fn main() -> io::Result<()> {
     // on para completion, on speed.
     let mut start_time = Instant::now();
     let mut timer_init: bool = false;
+
+    let game_mode = GameStage::Menu;
+
     loop {
+        // Okay I need to make a normal menu stage where I can choose everything
+        // else and then I need to have a game stage.
+        // TODO: Tab should restart. Esc should go to menu and then quit.
+        match game_mode {
+            GameStage::Menu => {
+                let menu_name = String::from("Do you wanna start?");
+                if let Event::Key(KeyEvent { code, kind, .. }) = event::read()? {
+                    if kind != event::KeyEventKind::Press {
+                        queue!(
+                            stdout,
+                            terminal::Clear(terminal::ClearType::All),
+                            style::SetForegroundColor(main_color),
+                            cursor::MoveTo(current_position as u16, 0),
+                            Print(menu_name)
+                        )?;
+                        stdout.flush()?;
+                        continue;
+                    }
+                }
+                // if let Event::Key(KeyEvent { code, kind, .. }) = event::read()? {
+                //     if kind !=
+                // }
+            }
+            GameStage::Game => continue,
+        }
+
         // if event::poll(Duration::from_millis(100))? {
         if let Event::Key(KeyEvent { code, kind, .. }) = event::read()? {
             if kind != event::KeyEventKind::Press {
@@ -305,5 +353,8 @@ fn main() -> io::Result<()> {
         main_data.sort_by_value();
         main_data.export_data(cache_file_name)?;
     }
+
+    queue!(stdout, style::SetForegroundColor(main_color))?;
+
     Ok(())
 }
